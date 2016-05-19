@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://expath.org/ns/pkg" name="http://lagua.nl/pkg/xsltea" abbrev="xsltea" version="0.1" spec="1.0">
+    <title>XSLTea: An XSLT implementation in Xquery</title>
+    <xquery>
+        <namespace>http://lagua.nl/xquery/xsltea</namespace>
+        <file>xsltea.xqm</file>
+    </xquery>
+</package>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<meta xmlns="http://exist-db.org/xquery/repo">
+    <author>Wouter Hager</author>
+    <website>https://github.com/wshager/xsltea</website>
+    <license>TBD</license>
+    <copyright>true</copyright>
+    <description>XSLTea: An XSLT implementation in Xquery</description>
+    <type>library</type>
+    <status>stable</status>
+    <deployed>2013-08-26T16:44:50.804+02:00</deployed>
+</meta>
