@@ -5,6 +5,8 @@
 xquery version "3.1";
 
 module namespace xsltea="http://lagua.nl/xquery/xsltea";
+declare namespace output="http://www.w3.org/2010/xslt-xquery-serialization";
+import module namespace a="http://raddle.org/array-util" at "/db/apps/raddle.xq/lib/array-util.xql";
 
 (:import module namespace console="http://exist-db.org/xquery/console";:)
 
@@ -67,10 +69,17 @@ declare function xsltea:weigh-rule($q,$prio) {
     return $prio
 };
 
+declare function xsltea:value-of($c,$node){
+    $node/data()
+};
+
 declare function xsltea:create-context($root){
     let $templates := map {}
     let $templates := xsltea:insert-template($templates,"/|*",function($c,$n){
         xsltea:apply-templates($c,$n/node())
+    },1,(),true())
+    let $templates := xsltea:insert-template($templates,"text()|@*",function($c,$n){
+        $n/data()
     },1,(),true())
     return
         map {
@@ -90,11 +99,11 @@ declare function xsltea:get-ancestor-match($anc,$node){
 
 declare function xsltea:get-match($q,$node){
     if(matches($q,"^\*")) then
-        $node instance of node()
+        $node instance of element()
     else if(matches($q,"^@\*")) then
         $node instance of attribute()
     else if(matches($q,"^(node|element|attribute|text|comment|processing-instruction)\(")) then
-        util:eval("$n instance of " || $q)
+        util:eval("$node instance of " || $q)
     else if(matches($q,"/")) then
         let $parts := reverse(tokenize($q,"/"))
         return
@@ -117,20 +126,21 @@ declare function xsltea:get-match($q,$node){
 };
 
 declare function xsltea:apply-templates($context){
-    let $context := 
+    let $node :=
         if(map:contains($context,"current")) then
-            $context
+            $context("current")/node()
         else
-            map:put($context,"current",$context("root"))
-    return xsltea:apply-templates($context,$context("current"))
+            $context("root")
+    return xsltea:apply-templates($context,$node)
 };
 
-declare function xsltea:apply-templates($context,$node) {
-    let $rules := fold-left(map:keys($context("templates")),[],function($pre,$q){
-        let $match := 
+declare function xsltea:collect-rules($templates,$node){
+    fold-left(map:keys($templates),[],function($pre,$q){
+        let $match :=
             if(matches($q,"^/")) then
                 (: $node should match root :)
-                if($node eq $context("root")) then
+                if($node instance of element() and empty($node/..)) then
+                    let $n := util:log("info",$node) return
                     if(matches($q,"^/$")) then
                         true()
                     else
@@ -139,27 +149,38 @@ declare function xsltea:apply-templates($context,$node) {
                     false()
             else
                 xsltea:get-match($q,$node)
-        return 
+        return
             if($match) then
                 (: insert the rules :)
-                array:fold-left($context("templates")($q),$pre,function($pre,$_){
+                a:fold-left($templates($q),$pre,function($pre,$_){
                     array:append($pre,$_)
                 })
             else
                 $pre
     })
-    (: weigh the rules (using ancient sort) :)
-    let $weights := for $w at $i in array:flatten(array:for-each($rules,function($_) { $_("weight") }))
-        order by $w
-        return $i
-    let $chosen := fold-left($rules?($weights),(),function($pre,$cur){
-        if($pre instance of map(xs:string,item()?)) then
-            if($pre("default") and $cur("default") = false()) then
-                $cur
-            else
-                $pre
+};
+
+declare function local:serialize($dict){
+	serialize($dict,
+		<output:serialization-parameters>
+			<output:method>json</output:method>
+		</output:serialization-parameters>)
+};
+
+declare function xsltea:apply-templates($context,$nodes) {
+    for-each($nodes,function($node){
+        let $context := map:put($context,"current",$node)
+        let $rules := array:flatten(xsltea:collect-rules($context("templates"),$node))
+        return if(count($rules) > 0) then
+            (: weigh the rules (using ancient sort) :)
+            let $ordered :=  for $_ in $rules
+            order by $_("default"), $_("weight") descending
+            return $_
+                let $n := util:log("info",local:serialize(for-each($ordered,function($_) { map:remove($_,"fn")})))
+                let $chosen := $ordered[1]
+                let $fn := $chosen("fn")
+                return $fn($context,$node)
         else
-            $cur
+            ()
     })
-    return $chosen("fn")($context,$node)
 };
