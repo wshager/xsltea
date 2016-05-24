@@ -5,10 +5,6 @@
 xquery version "3.1";
 
 module namespace xsltea="http://lagua.nl/xquery/xsltea";
-declare namespace output="http://www.w3.org/2010/xslt-xquery-serialization";
-import module namespace a="http://raddle.org/array-util" at "/db/apps/raddle.xq/lib/array-util.xql";
-
-(:import module namespace console="http://exist-db.org/xquery/console";:)
 
 declare function xsltea:template($c,$q,$fn) {
     xsltea:template($c,$q,$fn,1)
@@ -140,7 +136,6 @@ declare function xsltea:collect-rules($templates,$node){
             if(matches($q,"^/")) then
                 (: $node should match root :)
                 if($node instance of element() and empty($node/..)) then
-                    let $n := util:log("info",$node) return
                     if(matches($q,"^/$")) then
                         true()
                     else
@@ -152,19 +147,12 @@ declare function xsltea:collect-rules($templates,$node){
         return
             if($match) then
                 (: insert the rules :)
-                a:fold-left($templates($q),$pre,function($pre,$_){
+                array:fold-left($templates($q),$pre,function($pre,$_){
                     array:append($pre,$_)
                 })
             else
                 $pre
     })
-};
-
-declare function local:serialize($dict){
-	serialize($dict,
-		<output:serialization-parameters>
-			<output:method>json</output:method>
-		</output:serialization-parameters>)
 };
 
 declare function xsltea:apply-templates($context,$nodes) {
@@ -174,12 +162,10 @@ declare function xsltea:apply-templates($context,$nodes) {
         return if(count($rules) > 0) then
             (: weigh the rules (using ancient sort) :)
             let $ordered :=  for $_ in $rules
-            order by $_("default"), $_("weight") descending
-            return $_
-                let $n := util:log("info",local:serialize(for-each($ordered,function($_) { map:remove($_,"fn")})))
-                let $chosen := $ordered[1]
-                let $fn := $chosen("fn")
-                return $fn($context,$node)
+                order by $_("default"), $_("weight") descending
+                return $_
+            let $chosen := $ordered[1]
+            return $chosen("fn")($context,$node)
         else
             ()
     })
