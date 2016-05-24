@@ -6,6 +6,15 @@ xquery version "3.1";
 
 module namespace xsltea="http://lagua.nl/xquery/xsltea";
 
+declare namespace a="http://lagua.nl/xquery/array-util";
+
+declare function a:fold-left($array as array(item()?),$zero,$function){
+	if(array:size($array) eq 0) then
+		$zero
+	else
+		a:fold-left(array:tail($array), $function($zero, array:head($array)), $function )
+};
+
 declare function xsltea:template($c,$q,$fn) {
     xsltea:template($c,$q,$fn,1)
 };
@@ -147,7 +156,7 @@ declare function xsltea:collect-rules($templates,$node){
         return
             if($match) then
                 (: insert the rules :)
-                array:fold-left($templates($q),$pre,function($pre,$_){
+                a:fold-left($templates($q),$pre,function($pre,$_){
                     array:append($pre,$_)
                 })
             else
@@ -164,8 +173,7 @@ declare function xsltea:apply-templates($context,$nodes) {
             let $ordered :=  for $_ in $rules
                 order by $_("default"), $_("weight") descending
                 return $_
-            let $chosen := $ordered[1]
-            return $chosen("fn")($context,$node)
+            return $ordered[1]("fn")($context,$node)
         else
             ()
     })
