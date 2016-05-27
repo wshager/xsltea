@@ -10,18 +10,18 @@ declare namespace a="http://lagua.nl/xquery/array-util";
 declare namespace s="http://lagua.nl/xquery/seq-util";
 
 declare function a:fold-left($array as array(item()?),$zero,$function){
-	if(array:size($array) eq 0) then
-		$zero
-	else
-		a:fold-left(array:tail($array), $function($zero, array:head($array)), $function )
+    if(array:size($array) eq 0) then
+        $zero
+    else
+        a:fold-left(array:tail($array), $function($zero, array:head($array)), $function )
 };
 
 
 declare function s:fold-left($seq as item()*,$zero,$function){
-	if(count($seq) eq 0) then
-		$zero
-	else
-		s:fold-left(tail($seq), $function($zero, head($seq)), $function )
+    if(count($seq) eq 0) then
+        $zero
+    else
+        s:fold-left(tail($seq), $function($zero, head($seq)), $function )
 };
 
 declare function xsltea:template($c,$q,$fn) {
@@ -268,26 +268,56 @@ declare function xsltea:apply($c,$xsl,$node) {
             typeswitch($cur)
             case element() return
                 if($cur/namespace-uri() eq "http://www.w3.org/1999/XSL/Transform") then
-                    switch(local-name($cur))
-                        case "apply-templates" return
-                            let $ret := xsltea:apply-templates($pre,if($cur/@match) then util:eval("$node/" || $cur/@match) else $node/node())
-                            return xsltea:insert-result($pre,$ret)
-                        case "value-of" return
-                            let $val := s:fold-left(map:keys($pre("frame")),$cur/@select/string(),function($acc,$cur){
-                                replace($acc,"\$" || $cur,concat("'",$pre("frame")($cur),"'"))
+                    let $frame := $pre("frame") return
+                    let $select := $cur/@select | $cur/@test
+                    let $select :=
+                        if(exists($select)) then
+                            s:fold-left(map:keys($frame),$select/string(),function($acc,$cur){
+                                replace($acc,"\$" || $cur,concat("\$frame('",$cur,"')"))
                             })
-                            return xsltea:insert-result($pre, string(util:eval("$node/" || $val)))
-                        case "copy-of" return
-                            xsltea:insert-result($pre,util:eval("$node/" || $cur/@select))
-                        case "copy" return
-                            xsltea:insert-result($pre,$node)
-                        case "variable" return
-                            let $val := if($cur/@select) then util:eval("$node/" || $cur/@select/string()) else xsltea:apply($pre,$cur,$node)("result")
-                            return
-                                map:put($pre,"frame",map:put($pre("frame"),$cur/@name/string(),$val))
-                        default return xsltea:insert-result($pre,xsltea:apply-templates($pre,if($cur/@match) then util:eval("$node/" || $cur/@match) else $node/node()))
+                        else
+                            "."
+                    return
+                        switch(local-name($cur))
+                            case "apply-templates" return
+                                let $ret := xsltea:apply-templates($pre,if($cur/@match) then util:eval("$node/" || $cur/@match) else $node/node())
+                                return xsltea:insert-result($pre,$ret)
+                            case "value-of" return
+                                xsltea:insert-result($pre, string(util:eval("$node/" || $select)))
+                            case "copy-of" return
+                                xsltea:insert-result($pre,util:eval("$node/" || $select))
+                            case "copy" return
+                                xsltea:insert-result($pre,$node)
+                            case "if" case "when" return
+                                if(util:eval("$node/" || $select)) then
+                                    xsltea:apply($pre,$cur,$node)
+                                else
+                                    $pre
+                            case "choose" return
+                                let $ret := xsltea:apply($pre,element xsl:choose { $cur/node()[local-name(.) eq "when"] },$node)("result")[exists(.)]
+                                return
+                                    if(exists($ret)) then
+                                        xsltea:insert-result($pre,$ret[1])
+                                    else
+                                        xsltea:apply($pre,$cur/node()[local-name(.) eq "otherwise"],$node)
+                            case "variable" return
+                                let $val := if($cur/@select) then util:eval("$node/" || $select) else xsltea:apply($pre,$cur,$node)("result")
+                                return
+                                    map:put($pre,"frame",map:put($pre("frame"),$cur/@name/string(),$val))
+                            default return xsltea:insert-result($pre,xsltea:apply-templates($pre,if($cur/@match) then util:eval("$node/" || $cur/@match) else $node/node()))
                 else
-                    xsltea:insert-result($pre,element { name($cur) } {  xsltea:apply($pre,$cur,$node)("result") })
+                    let $frame := $pre("frame")
+                    return
+                        xsltea:insert-result($pre,element { name($cur) } {
+                            for-each($cur/@*,function($attr) {
+                                let $val :=
+                                    s:fold-left(map:keys($frame),$attr/data(),function($acc,$cur){
+                                        replace($acc,"\{\$" || $cur || "\}",concat("\$frame('",$cur,"')"))
+                                    })
+                                return attribute { name($attr) } { util:eval("$node/" || $val) }
+                            }),
+                            xsltea:apply($pre,$cur,$node)("result")
+                        })
             case text() return xsltea:insert-result($pre,$cur)
             default return xsltea:insert-result($pre,$cur)
         })
