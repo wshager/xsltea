@@ -5,14 +5,23 @@
 xquery version "3.1";
 
 module namespace xsltea="http://lagua.nl/xquery/xsltea";
-
+declare namespace xsl="http://www.w3.org/1999/XSL/Transform";
 declare namespace a="http://lagua.nl/xquery/array-util";
+declare namespace s="http://lagua.nl/xquery/seq-util";
 
 declare function a:fold-left($array as array(item()?),$zero,$function){
 	if(array:size($array) eq 0) then
 		$zero
 	else
 		a:fold-left(array:tail($array), $function($zero, array:head($array)), $function )
+};
+
+
+declare function s:fold-left($seq as item()*,$zero,$function){
+	if(count($seq) eq 0) then
+		$zero
+	else
+		s:fold-left(tail($seq), $function($zero, head($seq)), $function )
 };
 
 declare function xsltea:template($c,$q,$fn) {
@@ -29,7 +38,7 @@ declare function xsltea:template($c,$q,$fn,$prio,$mode){
 declare function xsltea:insert-template($templates,$q,$fn,$prio,$mode,$default){
     (: check if there's a union :)
     if(matches($q,"\|")) then
-        fold-left(tokenize($q,"\|"),$templates,function($pre,$cur){
+        s:fold-left(tokenize($q,"\|"),$templates,function($pre,$cur){
             xsltea:insert-template($pre,replace($cur,"^\s+|\s+$",""),$fn,$prio,$mode,$default)
         })
     else
@@ -65,12 +74,12 @@ declare function xsltea:insert-template($templates,$q,$fn,$prio,$mode,$default){
 
 declare function xsltea:weigh-rule($q,$prio) {
     let $parts := tokenize($q,"\[")
-    let $prio := if(count($parts) > 1) then $prio - .5 else $prio
+    let $prio := if(count($parts) > 1) then $prio + .5 else $prio
     let $q := $parts[1]
-    let $prio := if(matches($q,"(^|[^:])\*")) then $prio + .5 else $prio
-    let $prio := if(matches($q,":\*")) then $prio + .25 else $prio
-    let $prio := if(matches($q,"^(node|element|attribute|text|comment|processing-instruction)\(\)")) then $prio + .5 else $prio
-    let $prio := if(matches($q,"/")) then $prio - .25 else $prio
+    let $prio := if(matches($q,"(^|[^:])\*[^:]")) then $prio - .5 else $prio
+    let $prio := if(matches($q,":\*")) then $prio - .25 else $prio
+    let $prio := if(matches($q,"^(node|element|attribute|text|comment|processing-instruction)\(\)")) then $prio - .5 else $prio
+    let $prio := if(matches($q,"/")) then $prio + .5 else $prio
     return $prio
 };
 
@@ -79,6 +88,10 @@ declare function xsltea:value-of($c,$node){
 };
 
 declare function xsltea:create-context($root){
+    xsltea:create-context($root,map {})
+};
+
+declare function xsltea:create-context($root,$params){
     let $templates := map {}
     let $templates := xsltea:insert-template($templates,"/|*",function($c,$n){
         xsltea:apply-templates($c,$n/node())
@@ -89,6 +102,7 @@ declare function xsltea:create-context($root){
     return
         map {
             "root" := $root,
+            "frame": $params,
             "templates" := $templates
         }
 };
@@ -177,4 +191,106 @@ declare function xsltea:apply-templates($context,$nodes) {
         else
             ()
     })
+};
+
+declare function xsltea:transform($root,$xsl) {
+    xsltea:transform($root,$xsl,map {})
+};
+
+declare function xsltea:transform($root,$xsl,$params) {
+    xsltea:apply-templates(xsltea:convert(xsltea:create-context($root,$params),$xsl))
+};
+
+declare function xsltea:convert($c,$xsl) {
+    (: get all nodes from parent, iterate over them with folding function :)
+    if($xsl/node()) then
+        fold-left($xsl/node(),$c,function($pre,$cur){
+            typeswitch($cur)
+            case element() return
+                if($cur/namespace-uri() eq "http://www.w3.org/1999/XSL/Transform") then
+                    switch(local-name($cur))
+                        case "template" return
+                            xsltea:template($pre,$cur/@match/string(),function($c,$n) {
+                                xsltea:apply(map:put($c,"result",()),$cur,$n)("result")
+                            },if(exists($cur/@priority)) then
+                                number($cur/@priority)
+                            else
+                                1,$cur/@mode/string())
+                        default return $pre
+                else
+                    $pre
+            default return $pre
+        })
+    else
+        $c
+};
+
+declare function xsltea:append-child($p as element(),$c as item()) {
+    element { name($p) } {
+        $p/@*,
+        $p/*,
+        $c
+    }
+};
+
+declare function xsltea:insert-attr-data($p as attribute(),$c as xs:anyAtomicType*){
+    attribute { name ($p) } {
+        $p/data(),
+        $c
+    }
+};
+
+declare function xsltea:insert-text-data($p as text(),$c as xs:anyAtomicType*){
+    text {
+        $p/data(),
+        $c
+    }
+};
+
+
+declare function xsltea:insert-result($c,$n){
+    let $p := $c("result")
+    let $ret :=
+        typeswitch($p)
+            case element() return xsltea:append-child($p,$n)
+            case attribute() return xsltea:insert-attr-data($p,$n)
+            case text() return xsltea:insert-text-data($p,$n)
+            default return ($p,$n)
+    return map:put($c,"result",$ret)
+};
+
+declare function xsltea:apply($c,$xsl,$node) {
+    (: if the node is an xsl:template element, fold it into the context :)
+    (: if the node is some other xsl element, call the specified function :)
+    (: otherwise return the node :)
+    if($xsl/node()) then
+        s:fold-left($xsl/node(),$c,function($pre,$cur){
+            typeswitch($cur)
+            case element() return
+                if($cur/namespace-uri() eq "http://www.w3.org/1999/XSL/Transform") then
+                    switch(local-name($cur))
+                        case "apply-templates" return
+                            let $ret := xsltea:apply-templates($pre,if($cur/@match) then util:eval("$node/" || $cur/@match) else $node/node())
+                            return xsltea:insert-result($pre,$ret)
+                        case "value-of" return
+                            let $val := s:fold-left(map:keys($pre("frame")),$cur/@select/string(),function($acc,$cur){
+                                replace($acc,"\$" || $cur,concat("'",$pre("frame")($cur),"'"))
+                            })
+                            return xsltea:insert-result($pre, string(util:eval("$node/" || $val)))
+                        case "copy-of" return
+                            xsltea:insert-result($pre,util:eval("$node/" || $cur/@select))
+                        case "copy" return
+                            xsltea:insert-result($pre,$node)
+                        case "variable" return
+                            let $val := if($cur/@select) then util:eval("$node/" || $cur/@select/string()) else xsltea:apply($pre,$cur,$node)("result")
+                            return
+                                map:put($pre,"frame",map:put($pre("frame"),$cur/@name/string(),$val))
+                        default return xsltea:insert-result($pre,xsltea:apply-templates($pre,if($cur/@match) then util:eval("$node/" || $cur/@match) else $node/node()))
+                else
+                    xsltea:insert-result($pre,element { name($cur) } {  xsltea:apply($pre,$cur,$node)("result") })
+            case text() return xsltea:insert-result($pre,$cur)
+            default return xsltea:insert-result($pre,$cur)
+        })
+    else
+        $c
 };
