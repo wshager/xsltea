@@ -18,9 +18,19 @@ Since XSLT presupposes a context, you have to pass it around yourself in Xquery.
 
 Now you can start adding templates to the context by calling `xsltea:template($context,$match,$function,$priority,$mode)`, where the provided function will be executed with the context and the current match when it has been selected by the processor. The run the processor, call `xsltea:apply-templates($context)`.
 
+There's also a function to convert template rules from an XSLT document into XQuery-based rules, which can be simply called with `xsltea:transform($root-node,$xslt-node,$parameters)`, where $parameters is a key-value map.
+
+
 Production Note
 ---------------
 This library is currently in alpha, and not ready for production. If you care about this library, please help to improve it.
+
+TODO:
+
+* imports
+* rigorous testing
+* error handling
+* anything else
 
 Legacy Example
 ---------------
