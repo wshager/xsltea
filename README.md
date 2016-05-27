@@ -25,6 +25,7 @@ This library is currently in alpha, and not ready for production. If you care ab
 Legacy Example
 ---------------
 
+```xquery
 xquery version "3.1";
 
 import module namespace xsltea="http://lagua.nl/xquery/xsltea";
@@ -39,13 +40,14 @@ let $xsl := <xsl:stylesheet version="3.1"
     </xsl:template>
 </xsl:stylesheet>
 
-
 return xsltea:transform(element root { element a { "test" }},$xsl)
+```
 
 
 Pure XQuery Example
 -------------------
 
+```xquery
 xquery version "3.1";
 
 import module namespace xsltea="http://lagua.nl/xquery/xsltea";
@@ -59,3 +61,4 @@ let $c := xsltea:template($c,"/",function($c,$n){
 })
 
 return xsltea:apply-templates($c)
+```
