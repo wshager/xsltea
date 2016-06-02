@@ -43,6 +43,7 @@ declare function xsltea:insert-template($templates,$q,$fn,$prio,$mode,$default){
         })
     else
     (: do we have a rule for this query ? :)
+    let $ni := util:log("info",$q) return
     if(map:contains($templates,$q)) then
         let $rules := $templates($q)
         (: get the lowest prio rule, which should be the first :)
@@ -56,6 +57,7 @@ declare function xsltea:insert-template($templates,$q,$fn,$prio,$mode,$default){
                 map:put($templates,$q,array:append($rules,map {
                     "q" := $q,
                     "prio" := $prio,
+                    "mode" := $mode,
                     "weight" := xsltea:weigh-rule($q,$prio),
                     "fn" := $fn,
                     "default" := $default
@@ -65,6 +67,7 @@ declare function xsltea:insert-template($templates,$q,$fn,$prio,$mode,$default){
             map {
                 "q" := $q,
                 "prio" := $prio,
+                "mode" := $mode,
                 "weight" := xsltea:weigh-rule($q,$prio),
                 "fn" := $fn,
                 "default" := $default
@@ -184,13 +187,18 @@ declare function xsltea:apply-templates($context,$nodes) {
         let $rules := array:flatten(xsltea:collect-rules($context("templates"),$node))
         return if(count($rules) > 0) then
             (: weigh the rules (using ancient sort) :)
-            let $ordered :=  for $_ in $rules
+            let $ordered := for $_ in $rules
                 order by $_("default"), $_("weight") descending
                 return $_
             return $ordered[1]("fn")($context,$node)
         else
             ()
     })
+};
+
+declare function xsltea:call-template($context,$name){
+    let $rules := $context("templates")("#" || $name)
+    return $rules(1)("fn")($context,())
 };
 
 declare function xsltea:transform($root,$xsl) {
@@ -210,12 +218,23 @@ declare function xsltea:convert($c,$xsl) {
                 if($cur/namespace-uri() eq "http://www.w3.org/1999/XSL/Transform") then
                     switch(local-name($cur))
                         case "template" return
-                            xsltea:template($pre,$cur/@match/string(),function($c,$n) {
-                                xsltea:apply(map:put($c,"result",()),$cur,$n)("result")
-                            },if(exists($cur/@priority)) then
-                                number($cur/@priority)
-                            else
-                                1,$cur/@mode/string())
+                            let $named := exists($cur/@name)
+                            return
+                                xsltea:template(
+                                    $pre,
+                                    if($named) then
+                                        "#" || $cur/@name/string()
+                                    else
+                                        $cur/@match/string(),
+                                    function($c,$n) {
+                                        xsltea:apply(map:put($c,"result",()),$cur,$n)("result")
+                                    },
+                                    if(exists($cur/@priority)) then
+                                        number($cur/@priority)
+                                    else
+                                        1,
+                                    $cur/@mode/string()
+                                )
                         default return $pre
                 else
                     $pre
@@ -282,6 +301,10 @@ declare function xsltea:apply($c,$xsl,$node) {
                             case "apply-templates" return
                                 let $ret := xsltea:apply-templates($pre,if($cur/@match) then util:eval("$node/" || $cur/@match) else $node/node())
                                 return xsltea:insert-result($pre,$ret)
+                            case "call-template" return
+                                let $pre := xsltea:apply($pre,$cur,$node)
+                                let $ret := xsltea:call-template($pre,$cur/@name/string())
+                                return xsltea:insert-result($pre,$ret)
                             case "value-of" return
                                 xsltea:insert-result($pre, string(util:eval("$node/" || $select)))
                             case "copy-of" return
@@ -300,7 +323,7 @@ declare function xsltea:apply($c,$xsl,$node) {
                                         xsltea:insert-result($pre,$ret[1])
                                     else
                                         xsltea:apply($pre,$cur/node()[local-name(.) eq "otherwise"],$node)
-                            case "variable" return
+                            case "variable" case "with-param" return
                                 let $val := if($cur/@select) then util:eval("$node/" || $select) else xsltea:apply($pre,$cur,$node)("result")
                                 return
                                     map:put($pre,"frame",map:put($pre("frame"),$cur/@name/string(),$val))
@@ -310,11 +333,18 @@ declare function xsltea:apply($c,$xsl,$node) {
                     return
                         xsltea:insert-result($pre,element { name($cur) } {
                             for-each($cur/@*,function($attr) {
-                                let $val :=
-                                    s:fold-left(map:keys($frame),$attr/data(),function($acc,$cur){
-                                        replace($acc,"\{\$" || $cur || "\}",concat("\$frame('",$cur,"')"))
-                                    })
-                                return attribute { name($attr) } { util:eval("$node/" || $val) }
+                                let $data := $attr/data()
+                                return attribute { name($attr) } {
+                                    if(matches($data,"\{")) then
+                                        string-join(for-each(analyze-string($data,"\{(.*?)\}")/*,function($_){
+                                            if($_/fn:group) then
+                                                util:eval("$node/" || replace($_/fn:group,"\$([\p{L}\p{N}\-_]+)","\$frame('$1')"))
+                                            else
+                                                $_
+                                        }))
+                                    else
+                                        $data
+                                }
                             }),
                             xsltea:apply($pre,$cur,$node)("result")
                         })
