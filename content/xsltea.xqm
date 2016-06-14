@@ -5,6 +5,8 @@
 xquery version "3.1";
 
 module namespace xsltea="http://lagua.nl/xquery/xsltea";
+
+declare namespace util="http://exist-db.org/xquery/util";
 declare namespace xsl="http://www.w3.org/1999/XSL/Transform";
 declare namespace a="http://lagua.nl/xquery/array-util";
 declare namespace s="http://lagua.nl/xquery/seq-util";
@@ -362,18 +364,14 @@ declare function xsltea:insert-text-data($p as text(),$c as xs:anyAtomicType*){
 };
 
 declare function xsltea:insert-result($c,$n){
-    xsltea:insert-result($c,$n,())
-};
-
-declare function xsltea:insert-result($c,$n,$s){
     let $p := $c("result")
     let $ret :=
         try {
-        typeswitch($p)
-            case element() return xsltea:append-child($p,$n)
-            case attribute() return xsltea:insert-attr-data($p,$n)
-            case text() return xsltea:insert-text-data($p,$n)
-            default return ($p,$n)
+            typeswitch($p)
+                case element() return xsltea:append-child($p,$n)
+                case attribute() return xsltea:insert-attr-data($p,$n)
+                case text() return xsltea:insert-text-data($p,$n)
+                default return ($p,$n)
         } catch * {
             error(QName("http://lagua.nl/xquery/xsltea","xsltea:error"),"error in insert")
         }
@@ -411,13 +409,11 @@ declare function xsltea:process-element($pre,$cur,$node){
             }
         })
     }
-    let $frame := xsltea:convert(map:put($pre,"result",$elem),$cur,$node)
-    let $ret := try {
-        $frame("result")
+    return try {
+        xsltea:insert-result($pre, xsltea:convert(map:put($pre,"result",$elem),$cur,$node)("result"))
     } catch * {
-        error(QName("http://lagua.nl/xquery/xsltea","xsltea:error"),"error in node")
+        error(QName("http://lagua.nl/xquery/xsltea","xsltea:error"),"error in node: " || $err:description)
     }
-    return xsltea:insert-result($pre, $ret)
 };
 
 declare function xsltea:number($pre,$cur,$node){
@@ -446,7 +442,7 @@ declare function xsltea:number($pre,$cur,$node){
             })
         else
             count(xsltea:eval($pre,$cnode,"preceding-sibling::" || $count)) + 1
-    return xsltea:insert-result($pre,string-join($no,"."),$cur)
+    return xsltea:insert-result($pre,string-join($no,"."))
 };
 
 declare function xsltea:for-each($pre,$cur,$node){
@@ -455,7 +451,7 @@ declare function xsltea:for-each($pre,$cur,$node){
         for-each($seq,function($node){
             xsltea:convert(map:put($pre,"result",()),$cur,$node)("result")
         })
-    return xsltea:insert-result($pre,$ret,$cur)
+    return xsltea:insert-result($pre,$ret)
 };
 
 declare function xsltea:variable($pre,$cur,$node){
@@ -552,20 +548,28 @@ declare function xsltea:convert($c,$xsl,$node,$import) {
                             (: first insert params, but create a copy of context :)
                             xsltea:call-template(xsltea:convert($pre,$cur,$node),$cur/@name/string(),$node)
                         case "value-of" return
-                            xsltea:insert-result($pre, string(xsltea:eval($pre,$node,$cur/@select/string())),$cur)
+                            try {
+                                xsltea:insert-result($pre, string-join(xsltea:eval($pre,$node,$cur/@select/string())))
+                            } catch * {
+                                error(QName("http://lagua.nl/xquery/xsltea","xsltea:error"),"error in value-of &quot;" || $cur/@select || "&quot;")
+                            }
                         case "copy-of" return
                             xsltea:insert-result($pre,xsltea:eval($pre,$node,$cur/@select/string()))
                         case "copy" return
-                            xsltea:insert-result($pre,$node,$cur)
+                            xsltea:insert-result($pre,$node)
                         case "if" case "when" return
                             xsltea:if($pre,$cur,$node)
                         case "choose" return
                             xsltea:choose($pre,$cur,$node)
-                        case "text" return xsltea:insert-result($pre,text { $cur/node()},$cur)
+                        case "text" return xsltea:insert-result($pre,text { $cur/node()})
                         case "element" return
-                            xsltea:insert-result($pre,xsltea:convert(map:put($pre,"result",element { $cur/@name/string() } { () }),$cur,$node)("result"),$cur)
+                            xsltea:insert-result($pre,xsltea:convert(map:put($pre,"result",element { $cur/@name/string() } { }),$cur,$node)("result"))
                         case "attribute" return
-                            xsltea:insert-result($pre,xsltea:convert(map:put($pre,"result",attribute { $cur/@name/string() } { () }),$cur,$node)("result"),$cur)
+                            try {
+                                xsltea:insert-result($pre,xsltea:convert(map:put($pre,"result",attribute { $cur/@name/string() } { }),$cur,$node)("result"))
+                            } catch * {
+                                error(QName("http://lagua.nl/xquery/xsltea","xsltea:error"),"error in attr &quot;" || $cur/@name || "&quot;")
+                            }
                         case "for-each" return
                             xsltea:for-each($pre,$cur,$node)
                         case "number" return
@@ -573,7 +577,11 @@ declare function xsltea:convert($c,$xsl,$node,$import) {
                         default return $pre
                 else
                     xsltea:process-element($pre,$cur,$node)
-            case text() return xsltea:insert-result($pre,$cur)
+            case text() return
+                if(matches($cur,"^[&#x20;&#x9;&#xD;&#xA;]+$")) then
+                    $pre
+                else
+                    xsltea:insert-result($pre,$cur)
             default return $pre
         })
     else
