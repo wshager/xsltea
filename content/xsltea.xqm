@@ -136,7 +136,7 @@ declare function xsltea:create-context($root,$params,$nss){
         util:declare-namespace($key, $val)
     })
     let $templates := xsltea:insert-template($templates,"/|*",function($c,$n){
-        xsltea:apply-templates($c,$n/node(),())
+        xsltea:apply-templates($c,$n/node(),(),false())
     },1,(),(),true())
     let $templates := xsltea:insert-template($templates,"text()|@*",function($c,$n){
         xsltea:insert-result($c, $n/data())
@@ -196,33 +196,42 @@ declare function xsltea:apply-templates($context){
             $context("current")/node()
         else
             $context("root")
-    return xsltea:apply-templates($context,$node,())
+    return xsltea:apply-templates($context,$node,(),false())
 };
 
 declare function xsltea:index-in-siblings($nodes,$node as node()) as xs:integer* {
     for $seq in (1 to count($nodes)) return $seq[$nodes[$seq] is $node]
 };
 
-declare function xsltea:apply-templates($context,$nodes,$mode) {
-    s:fold-left-at($nodes,$context,function($pre,$node,$i){
-        let $pre := map:put($pre,"current",$node)
-        let $rules := array:flatten(xsltea:collect-rules($pre("templates"),$node,$mode))
-        return if(count($rules) > 0) then
-            (: weigh the rules (using ancient sort) :)
-            let $ordered :=  for $_ in $rules
-                order by $_("default"), $_("weight") descending
-                return $_
-            let $fn :=
-                if(exists($ordered)) then
-                    $ordered[1]("fn")
-                else
-                    error(QName("http://lagua.nl/xquery/xsltea","xsltea:error"),
-                        concat("Template not present in context", if($mode) then "(with mode &quot;" || $mode || "&quot;)" else "","."))
-            let $pre := map:put($pre,"match",$ordered[1]("q"))
-            return $fn($pre,$node)
+declare function xsltea:apply-templates($context,$nodes,$mode,$converted) {
+    let $ret :=
+        s:fold-left-at($nodes,$context,function($pre,$node,$i){
+            let $pre := map:put($pre,"current",$node)
+            let $rules := array:flatten(xsltea:collect-rules($pre("templates"),$node,$mode))
+            return if(count($rules) > 0) then
+                (: weigh the rules (using ancient sort) :)
+                let $ordered :=  for $_ in $rules
+                    order by $_("default"), $_("weight") descending
+                    return $_
+                let $fn :=
+                    if(exists($ordered)) then
+                        $ordered[1]("fn")
+                    else
+                        error(QName("http://lagua.nl/xquery/xsltea","xsltea:error"),
+                            concat("Template not present in context", if($mode) then "(with mode &quot;" || $mode || "&quot;)" else "","."))
+                let $pre := map:put($pre,"match",$ordered[1]("q"))
+                return $fn($pre,$node)
+            else
+                $pre
+        })
+    return
+        if($converted) then
+            $ret
         else
-            $pre
-    })
+            if($ret instance of map(xs:string,item()?)) then
+                $ret("result")
+            else
+                $ret
 };
 
 declare function xsltea:collect-rules($templates,$node,$mode){
@@ -276,7 +285,7 @@ declare function xsltea:transform($root,$xsl,$params) {
 };
 
 declare function xsltea:transform($root,$xsl,$params,$nss) {
-    xsltea:apply-templates(xsltea:convert(xsltea:create-context($root,$params,$nss),$xsl,$root))("result")
+    xsltea:apply-templates(xsltea:convert(xsltea:create-context($root,$params,$nss),$xsl,$root))
 };
 
 declare function xsltea:resolve-doc($base,$uri) {
@@ -576,7 +585,7 @@ declare function xsltea:convert($c,$xsl,$node,$import) {
                                     $import
                                 )
                         case "apply-templates" return
-                            xsltea:apply-templates($pre,if($cur/@select) then xsltea:eval($pre,$node,$cur/@select/string()) else $node/node(),$cur/@mode/string())
+                            xsltea:apply-templates($pre,if($cur/@select) then xsltea:eval($pre,$node,$cur/@select/string()) else $node/node(),$cur/@mode/string(),true())
                         case "call-template" return
                             (: first insert params, but create a copy of context :)
                             xsltea:call-template(xsltea:convert($pre,$cur,$node),$cur/@name/string(),$node)
