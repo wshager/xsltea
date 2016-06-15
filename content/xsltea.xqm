@@ -390,6 +390,45 @@ declare function xsltea:eval($c,$node,$select){
         }
 };
 
+declare function xsltea:analyze-data($data) {
+    let $parts := analyze-string($data,"(\}?)([^\{\}]*)(\{?)")/fn:match
+    return
+        if(count($parts) < 3) then
+            concat("'",$data,"'")
+        else
+            xsltea:analyze-data($parts,(),false())
+};
+
+declare function xsltea:analyze-data($seq as item()*,$pre,$cat){
+    if(empty($seq)) then
+        $pre
+    else
+        let $cur := head($seq)
+        let $str := $cur/fn:group[@nr=2]/string()
+        let $opener := matches($cur/fn:group[@nr=3],"\{")
+        let $closer := matches($cur/fn:group[@nr=1],"\}")
+        return
+            if(empty($cur/fn:group[@nr=2])) then
+                xsltea:analyze-data(tail($seq),$pre,$cat)
+            else if(($opener and $closer)) then
+                (concat("'",$str,"'"),xsltea:analyze-data(tail($seq),$pre,$cat))
+            else
+                let $quoted := matches($str,"'") and count(tokenize($str,"'")) mod 2 eq 0
+                let $str :=
+                    if($quoted) then
+                        concat($cur/fn:group[@nr=1]/string(),$str,$cur/fn:group[@nr=3]/string())
+                    else if($opener or $closer) then
+                        concat("'",$str,"'")
+                    else
+                        $str
+                let $ret := xsltea:analyze-data(tail($seq),$pre,if($quoted) then not($cat) else $cat)
+                return
+                    if(($cat and not($quoted)) or ($quoted and not($cat))) then
+                        (concat($str,head($ret)),tail($ret))
+                    else
+                        ($str,$ret)
+};
+
 declare function xsltea:process-element($pre,$cur,$node){
     let $frame := $pre("frame")
     let $ns := $cur/namespace-uri()
@@ -397,15 +436,9 @@ declare function xsltea:process-element($pre,$cur,$node){
         for-each($cur/@*,function($attr) {
             let $data := $attr/data()
             return attribute { name($attr) } {
-                if(matches($data,"\{")) then
-                    string-join(for-each(analyze-string($data,"\{(.*?)\}")/*,function($_){
-                        if($_/fn:group) then
-                            xsltea:eval($pre,$node,$_/fn:group/string())
-                        else
-                            $_
-                    }))
-                else
-                    $data
+                string-join(for-each(xsltea:analyze-data($data),function($_){
+                    xsltea:eval($pre,$node,$_)
+                }))
             }
         })
     }
