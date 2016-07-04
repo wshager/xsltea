@@ -5,7 +5,6 @@
 xquery version "3.1";
 
 module namespace xsltea="http://lagua.nl/xquery/xsltea";
-
 declare namespace util="http://exist-db.org/xquery/util";
 declare namespace xsl="http://www.w3.org/1999/XSL/Transform";
 declare namespace a="http://lagua.nl/xquery/array-util";
@@ -139,7 +138,7 @@ declare function xsltea:create-context($root,$params,$nss){
         xsltea:apply-templates($c,$n/node(),(),false())
     },1,(),(),true())
     let $templates := xsltea:insert-template($templates,"text()|@*",function($c,$n){
-        xsltea:insert-result($c, $n/data())
+        $n/data()
     },1,(),(),true())
     return
         map {
@@ -167,6 +166,20 @@ declare function xsltea:get-match($q,$node){
         $node instance of element()
     else if(matches($q,"^@\*")) then
         $node instance of attribute()
+    else if(matches($q,"/")) then
+        let $parts := reverse(tokenize($q,"/"))
+        return
+            if(xsltea:get-ancestor-match(tail($parts),$node/..)) then
+                xsltea:get-match(head($parts),$node)
+            else
+                false()
+    else
+        util:eval("$node/self::" || $q)
+    (:
+    if(matches($q,"^\*")) then
+        $node instance of element()
+    else if(matches($q,"^@\*")) then
+        $node instance of attribute()
     else if(matches($q,"^(node|element|attribute|text|comment|processing-instruction)\(")) then
         util:eval("$node instance of " || $q)
     else if(matches($q,"/")) then
@@ -188,6 +201,7 @@ declare function xsltea:get-match($q,$node){
         name($node) eq $q
     else
         $node eq $q
+        :)
 };
 
 declare function xsltea:apply-templates($context){
@@ -196,7 +210,15 @@ declare function xsltea:apply-templates($context){
             $context("current")/node()
         else
             $context("root")
-    return xsltea:apply-templates($context,$node,(),false())
+    return xsltea:apply-templates($context,$node)
+};
+
+declare function xsltea:apply-templates($context,$node){
+    xsltea:apply-templates($context,$node,())
+};
+
+declare function xsltea:apply-templates($context,$node,$mode){
+    xsltea:apply-templates($context,$node,$mode,false())
 };
 
 declare function xsltea:index-in-siblings($nodes,$node as node()) as xs:integer* {
@@ -205,7 +227,7 @@ declare function xsltea:index-in-siblings($nodes,$node as node()) as xs:integer*
 
 declare function xsltea:apply-templates($context,$nodes,$mode,$converted) {
     let $ret :=
-        s:fold-left-at($nodes,$context,function($pre,$node,$i){
+        s:fold-left-at($nodes,map:put($context,"result",()),function($pre,$node,$i){
             let $pre := map:put($pre,"current",$node)
             let $rules := array:flatten(xsltea:collect-rules($pre("templates"),$node,$mode))
             return if(count($rules) > 0) then
@@ -220,7 +242,14 @@ declare function xsltea:apply-templates($context,$nodes,$mode,$converted) {
                         error(QName("http://lagua.nl/xquery/xsltea","xsltea:error"),
                             concat("Template not present in context", if($mode) then "(with mode &quot;" || $mode || "&quot;)" else "","."))
                 let $pre := map:put($pre,"match",$ordered[1]("q"))
-                return $fn($pre,$node)
+                let $ret := $fn($pre,$node)
+                return
+                    if($ret instance of map(xs:string,item()?)) then
+                        $ret
+                    else if($ret) then
+                        map:put($pre,"result",($pre("result"),$ret))
+                    else
+                        $pre
             else
                 $pre
         })
@@ -628,6 +657,71 @@ declare function xsltea:convert($c,$xsl,$node,$import) {
         })
     else
         $c
+};
+
+declare function xsltea:transpile($xsl){
+    if($xsl/node()) then
+        s:fold-left($xsl/node(),(),function($pre,$cur){
+            typeswitch($cur)
+            case element() return
+                if($cur/namespace-uri() eq "http://www.w3.org/1999/XSL/Transform") then
+                    switch(local-name($cur))
+                        case "import" return (: this should be modular, so expect existing xql :)
+                            ($pre,concat("xsltea:resolve-doc('",$cur/base-uri(),"','",replace($cur/@href,".xsl$",".xql"),"')"))
+                        case "param" case "variable" case "with-param" return
+                            ($pre,concat("map:put($c,'",$cur/@name,"',",if($cur/@select) then concat("$n/",$cur/@select) else xsltea:transpile($cur),")"))
+                        (:case "key" return
+                            xsltea:setkey($pre,$cur,$node):)
+                        case "template" return
+                            let $named := exists($cur/@name)
+                            let $mode := $cur/@mode/string()
+                            let $tpl :=
+                                if($named) then
+                                    "#" || $cur/@name/string()
+                                else
+                                    $cur/@match/string()
+                            return
+                                ($pre,concat("xsltea:template($c,'",$tpl,"',function($c,$n){",xsltea:transpile($cur),"},",
+                                    if(exists($cur/@priority)) then
+                                        number($cur/@priority)
+                                    else
+                                        1,
+                                    $mode,")"))
+                        case "apply-templates" return
+                            ($pre,concat("xsltea:apply-templates($c,",if($cur/@select) then concat("$n/",$cur/@select/string()) else "$n",",'",$cur/@mode/string(),"')"))
+                        case "call-template" return
+                            (: first insert params, but create a copy of context :)
+                            ($pre,concat("xsltea:call-template($c,'",$cur/@name/string(),"',$n)"))
+                        case "value-of" return
+                            ($pre,concat("string($n/",$cur/@select/string(),")"))
+                        case "copy-of" return
+                            ($pre,concat("$n/",$cur/@select/string()))
+                        case "copy" return
+                            ($pre,"$n")
+                        case "if" case "when" return
+                            ($pre,concat("if($n/",$cur/@test/string(),") then ",xsltea:transpile($cur),if(local-name($cur) eq "if") then " else ()" else ""))
+                        case "choose" return
+                            let $when := string-join($cur/*[local-name() = "when"] ! xsltea:transpile(.)," else ")
+                            let $other := $cur/*[local-name() = "otherwise"]
+                            return ($pre,concat($when," else ",if($other) then xsltea:transpile($other) else "()"))
+                        case "text" return ($pre,concat("text { ",$cur/node(),"}"))
+                        case "element" return
+                            ($pre,concat("element { '",$cur/@name/string(),"' } { ",xsltea:transpile($cur)," }"))
+                        case "attribute" return
+                            ($pre,concat("attribute { '",$cur/@name/string(),"' } { ",xsltea:transpile($cur)," }"))
+                        case "for-each" return
+                            ($pre,concat("for-each($n/",$cur/@select/string(),",function($node){ ",xsltea:transpile($cur)," })"))
+                        (: case "number" return
+                            xsltea:number($pre,$cur,$node):)
+                        default return $pre
+                else
+                    ()
+            case text() return
+                ()
+            default return ()
+        })
+    else
+        ()
 };
 
 declare function xsltea:collect-all-rules($templates){
