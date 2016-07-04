@@ -174,7 +174,7 @@ declare function xsltea:get-match($q,$node){
             else
                 false()
     else
-        util:eval("$node/self::" || $q)
+        exists(util:eval("$node/self::" || $q))
     (:
     if(matches($q,"^\*")) then
         $node instance of element()
@@ -246,7 +246,7 @@ declare function xsltea:apply-templates($context,$nodes,$mode,$converted) {
                 return
                     if($ret instance of map(xs:string,item()?)) then
                         $ret
-                    else if($ret) then
+                    else if(exists($ret)) then
                         map:put($pre,"result",($pre("result"),$ret))
                     else
                         $pre
